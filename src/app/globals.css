@@ -3,6 +3,8 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --font-geist-sans: "Inter", sans-serif;
+  --font-geist-mono: "Fira Code", monospace;
 }
 
 @theme inline {
@@ -18,6 +20,13 @@
     --foreground: #ededed;
   }
 }
+
+@layer components {
+  .bg-glass {
+    @apply bg-white/60 dark:bg-black/40 backdrop-blur-md;
+  }
+}
+
 
 body {
   background: var(--background);
