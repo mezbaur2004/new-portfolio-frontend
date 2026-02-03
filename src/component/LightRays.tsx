@@ -27,6 +27,7 @@ interface LightRaysProps {
     mouseInfluence?: number;
     noiseAmount?: number;
     distortion?: number;
+    isLightTheme?: boolean;
     className?: string;
 }
 
@@ -35,19 +36,11 @@ const DEFAULT_COLOR = "#ffffff";
 const hexToRgb = (hex: string): [number, number, number] => {
     const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return m
-        ? [
-            parseInt(m[1], 16) / 255,
-            parseInt(m[2], 16) / 255,
-            parseInt(m[3], 16) / 255,
-        ]
+        ? [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255]
         : [1, 1, 1];
 };
 
-const getAnchorAndDir = (
-    origin: RaysOrigin,
-    w: number,
-    h: number
-): { anchor: [number, number]; dir: [number, number] } => {
+const getAnchorAndDir = (origin: RaysOrigin, w: number, h: number): { anchor: [number, number]; dir: [number, number] } => {
     const outside = 0.2;
     switch (origin) {
         case "top-left":
@@ -66,8 +59,8 @@ const getAnchorAndDir = (
             return { anchor: [0.5 * w, (1 + outside) * h], dir: [0, -1] };
         case "bottom-right":
             return { anchor: [w, (1 + outside) * h], dir: [0, -1] };
-        default: // "top-center"
-            return { anchor: [0.5 * w, -outside * h], dir: [0, 1] };
+        default:
+            return { anchor: [0.5 * w, -outside * h], dir: [0, 1] }; // top-center
     }
 };
 
@@ -84,6 +77,7 @@ const LightRays: React.FC<LightRaysProps> = ({
                                                  mouseInfluence = 0.1,
                                                  noiseAmount = 0.0,
                                                  distortion = 0.0,
+                                                 isLightTheme = false,
                                                  className = "",
                                              }) => {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -129,8 +123,8 @@ const LightRays: React.FC<LightRaysProps> = ({
         const initializeWebGL = async () => {
             if (!containerRef.current) return;
 
+            // micro-yield so layout stabilizes
             await new Promise((resolve) => setTimeout(resolve, 10));
-
             if (!containerRef.current) return;
 
             const renderer = new Renderer({
@@ -156,6 +150,7 @@ void main() {
   gl_Position = vec4(position, 0.0, 1.0);
 }`;
 
+            // Fragment shader updated: fade along ray distance, optional light-theme softening
             const frag = `precision highp float;
 
 uniform float iTime;
@@ -174,6 +169,7 @@ uniform vec2  mousePos;
 uniform float mouseInfluence;
 uniform float noiseAmount;
 uniform float distortion;
+uniform float isLightTheme;
 
 varying vec2 vUv;
 
@@ -208,6 +204,7 @@ float rayStrength(vec2 raySource, vec2 rayRefDirection, vec2 coord,
 }
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  // flip Y to match shader coordinate system used by the rest of the code
   vec2 coord = vec2(fragCoord.x, iResolution.y - fragCoord.y);
   
   vec2 finalRayDir = rayDir;
@@ -224,24 +221,38 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
                rayStrength(rayPos, finalRayDir, coord, 22.3991, 18.0234,
                            1.1 * raysSpeed);
 
-  fragColor = rays1 * 0.5 + rays2 * 0.4;
+  vec4 accum = rays1 * 0.5 + rays2 * 0.4;
 
   if (noiseAmount > 0.0) {
     float n = noise(coord * 0.01 + iTime * 0.1);
-    fragColor.rgb *= (1.0 - noiseAmount + noiseAmount * n);
+    accum.rgb *= (1.0 - noiseAmount + noiseAmount * n);
   }
 
-  float brightness = 1.0 - (coord.y / iResolution.y);
-  fragColor.x *= 0.1 + brightness * 0.8;
-  fragColor.y *= 0.3 + brightness * 0.6;
-  fragColor.z *= 0.5 + brightness * 0.5;
+  // --- distance-based fade along ray direction (replaces screen Y fade) ---
+  vec2 toCoord = coord - rayPos;
+  float rayDistance = length(toCoord);
+  float maxRayDist = iResolution.x * rayLength;
+  // normalize 0..1 where 1 is near origin, 0 is far away
+  float distanceFade = clamp(1.0 - rayDistance / maxRayDist, 0.0, 1.0);
+  // soften the falloff curve slightly
+  distanceFade = pow(distanceFade, 0.95);
 
+  accum.rgb *= distanceFade;
+
+  // saturation control
   if (saturation != 1.0) {
-    float gray = dot(fragColor.rgb, vec3(0.299, 0.587, 0.114));
-    fragColor.rgb = mix(vec3(gray), fragColor.rgb, saturation);
+    float gray = dot(accum.rgb, vec3(0.299, 0.587, 0.114));
+    accum.rgb = mix(vec3(gray), accum.rgb, saturation);
   }
 
-  fragColor.rgb *= raysColor;
+  // light-theme softening: reduce harshness on bright backgrounds
+  // isLightTheme should be 0.0 or 1.0 (or intermediate)
+  accum.rgb = mix(accum.rgb, pow(accum.rgb, vec3(0.85)), isLightTheme);
+
+  // apply color tint
+  accum.rgb *= raysColor;
+
+  fragColor = accum;
 }
 
 void main() {
@@ -268,6 +279,7 @@ void main() {
                 mouseInfluence: { value: mouseInfluence },
                 noiseAmount: { value: noiseAmount },
                 distortion: { value: distortion },
+                isLightTheme: { value: isLightTheme ? 1.0 : 0.0 },
             };
             uniformsRef.current = uniforms;
 
@@ -310,16 +322,11 @@ void main() {
                     const smoothing = 0.92;
 
                     smoothMouseRef.current.x =
-                        smoothMouseRef.current.x * smoothing +
-                        mouseRef.current.x * (1 - smoothing);
+                        smoothMouseRef.current.x * smoothing + mouseRef.current.x * (1 - smoothing);
                     smoothMouseRef.current.y =
-                        smoothMouseRef.current.y * smoothing +
-                        mouseRef.current.y * (1 - smoothing);
+                        smoothMouseRef.current.y * smoothing + mouseRef.current.y * (1 - smoothing);
 
-                    uniforms.mousePos.value = [
-                        smoothMouseRef.current.x,
-                        smoothMouseRef.current.y,
-                    ];
+                    uniforms.mousePos.value = [smoothMouseRef.current.x, smoothMouseRef.current.y];
                 }
 
                 try {
@@ -346,8 +353,7 @@ void main() {
                 if (renderer) {
                     try {
                         const canvas = renderer.gl.canvas;
-                        const loseContextExt =
-                            renderer.gl.getExtension("WEBGL_lose_context");
+                        const loseContextExt = renderer.gl.getExtension("WEBGL_lose_context");
                         if (loseContextExt) {
                             loseContextExt.loseContext();
                         }
@@ -388,11 +394,11 @@ void main() {
         mouseInfluence,
         noiseAmount,
         distortion,
+        isLightTheme,
     ]);
 
     useEffect(() => {
-        if (!uniformsRef.current || !containerRef.current || !rendererRef.current)
-            return;
+        if (!uniformsRef.current || !containerRef.current || !rendererRef.current) return;
 
         const u = uniformsRef.current;
         const renderer = rendererRef.current;
@@ -407,6 +413,7 @@ void main() {
         u.mouseInfluence.value = mouseInfluence;
         u.noiseAmount.value = noiseAmount;
         u.distortion.value = distortion;
+        u.isLightTheme.value = isLightTheme ? 1.0 : 0.0;
 
         const { clientWidth: wCSS, clientHeight: hCSS } = containerRef.current;
         const dpr = renderer.dpr;
@@ -425,6 +432,7 @@ void main() {
         mouseInfluence,
         noiseAmount,
         distortion,
+        isLightTheme,
     ]);
 
     useEffect(() => {
@@ -442,12 +450,7 @@ void main() {
         }
     }, [followMouse]);
 
-    return (
-        <div
-            ref={containerRef}
-            className={`pointer-events-none relative z-[3] h-full w-full overflow-hidden ${className}`.trim()}
-        />
-    );
+    return <div ref={containerRef} className={`pointer-events-none relative z-[3] h-full w-full overflow-hidden ${className}`.trim()} />;
 };
 
 export default LightRays;

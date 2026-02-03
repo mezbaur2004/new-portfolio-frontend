@@ -8,7 +8,18 @@ const config: Config = {
         "./components/**/*.{js,ts,jsx,tsx}",
     ],
     theme: {
-        extend: {},
+        // tailwind.config.js
+        extend: {
+            animation: {
+                fadeIn: "fadeIn 0.6s ease-out forwards",
+            },
+            keyframes: {
+                fadeIn: {
+                    to: { opacity: "1", transform: "translateY(0)" },
+                },
+            },
+        },
+
     },
     plugins: [],
 };

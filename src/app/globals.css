@@ -26,6 +26,9 @@
     @apply bg-white/60 dark:bg-black/40 backdrop-blur-md;
   }
 }
+html {
+  scroll-behavior: smooth;
+}
 
 
 body {
