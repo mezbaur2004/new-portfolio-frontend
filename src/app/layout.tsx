@@ -44,7 +44,7 @@ export default function RootLayout({
               distortion={0.01}
           />
       </div>
-      <main>
+      <main className="pt-12 sm:pt-16">
           {children}
       </main>
       </body>
